@@ -53,19 +53,36 @@ jobs:
     needs: build-and-push-backends
 
     steps:
-      - name: Preparar llave SSH
+      - name: Preparar llave SSH y configuracion de hosts
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/ec2_key.pem
           chmod 600 ~/.ssh/ec2_key.pem
 
+          cat > ~/.ssh/config <<CONFIG
+          Host bastion
+            HostName ${{ secrets.EC2_FRONT_HOST }}
+            User ${{ secrets.EC2_USER }}
+            IdentityFile ~/.ssh/ec2_key.pem
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            LogLevel ERROR
+
+          Host backend-private
+            HostName ${{ secrets.EC2_BACK_PRIVATE_IP }}
+            User ${{ secrets.EC2_USER }}
+            IdentityFile ~/.ssh/ec2_key.pem
+            ProxyJump bastion
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            LogLevel ERROR
+          CONFIG
+
+          chmod 600 ~/.ssh/config
+
       - name: Deploy en EC2 Backend privada via Frontend Bastion
         run: |
-          ssh -o StrictHostKeyChecking=no \
-              -o UserKnownHostsFile=/dev/null \
-              -i ~/.ssh/ec2_key.pem \
-              -J ${{ secrets.EC2_USER }}@${{ secrets.EC2_FRONT_HOST }} \
-              ${{ secrets.EC2_USER }}@${{ secrets.EC2_BACK_PRIVATE_IP }} << 'EOF'
+          ssh backend-private << 'EOF'
           set -e
 
           mkdir -p ~/devops-backend
