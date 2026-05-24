@@ -51,6 +51,7 @@ jobs:
   deploy-backends-ec2:
     runs-on: ubuntu-latest
     needs: build-and-push-backends
+    timeout-minutes: 15
 
     steps:
       - name: Preparar llave SSH y configuracion de hosts
@@ -82,32 +83,47 @@ jobs:
 
       - name: Deploy en EC2 Backend privada via Frontend Bastion
         run: |
-          ssh backend-private << 'EOF'
+          ssh \
+            -o BatchMode=yes \
+            -o ConnectTimeout=20 \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=3 \
+            backend-private << 'EOF'
           set -e
 
           mkdir -p ~/devops-backend
           cd ~/devops-backend
 
+          cat > init-multiple-dbs.sql << 'SQL'
+          CREATE DATABASE IF NOT EXISTS despacho_db;
+          CREATE DATABASE IF NOT EXISTS ventas_db;
+
+          CREATE USER IF NOT EXISTS 'appuser'@'%' IDENTIFIED BY 'apppass123';
+
+          GRANT ALL PRIVILEGES ON despacho_db.* TO 'appuser'@'%';
+          GRANT ALL PRIVILEGES ON ventas_db.* TO 'appuser'@'%';
+
+          FLUSH PRIVILEGES;
+          SQL
+
           cat > docker-compose.yml << 'COMPOSE'
           services:
-            mysql_despacho:
+            mysql_db:
               image: mysql:8.0
-              container_name: mysql_despacho
+              container_name: mysql_db
               restart: unless-stopped
               environment:
-                MYSQL_DATABASE: despacho_db
-                MYSQL_USER: appuser
-                MYSQL_PASSWORD: apppass123
                 MYSQL_ROOT_PASSWORD: rootpass123
               volumes:
-                - mysql_despacho_data:/var/lib/mysql
+                - mysql_data:/var/lib/mysql
+                - ./init-multiple-dbs.sql:/docker-entrypoint-initdb.d/init-multiple-dbs.sql:ro
               networks:
                 - backend_net
               healthcheck:
                 test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -prootpass123 || exit 1"]
                 interval: 10s
-                timeout: 5s
-                retries: 10
+                timeout: 10s
+                retries: 30
                 start_period: 90s
 
             backend_despacho:
@@ -115,13 +131,13 @@ jobs:
               container_name: backend_despacho
               restart: unless-stopped
               depends_on:
-                mysql_despacho:
+                mysql_db:
                   condition: service_healthy
               ports:
                 - "8080:8080"
               environment:
                 SERVER_PORT: 8080
-                DB_ENDPOINT: mysql_despacho
+                DB_ENDPOINT: mysql_db
                 DB_PORT: 3306
                 DB_NAME: despacho_db
                 DB_USERNAME: appuser
@@ -130,37 +146,18 @@ jobs:
               networks:
                 - backend_net
 
-            mysql_ventas:
-              image: mysql:8.0
-              container_name: mysql_ventas
-              restart: unless-stopped
-              environment:
-                MYSQL_DATABASE: ventas_db
-                MYSQL_USER: appuser
-                MYSQL_PASSWORD: apppass123
-                MYSQL_ROOT_PASSWORD: rootpass123
-              volumes:
-                - mysql_ventas_data:/var/lib/mysql
-              networks:
-                - backend_net
-              healthcheck:
-                test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-prootpass123"]
-                interval: 10s
-                timeout: 5s
-                retries: 10
-
             backend_ventas:
               image: dvillanueva1993/backend-ventas:latest
               container_name: backend_ventas
               restart: unless-stopped
               depends_on:
-                mysql_ventas:
+                mysql_db:
                   condition: service_healthy
               ports:
                 - "8082:8082"
               environment:
                 SERVER_PORT: 8082
-                SPRING_DATASOURCE_URL: jdbc:mysql://mysql_ventas:3306/ventas_db?useSSL=false&serverTimezone=UTC&createDatabaseIfNotExist=true&allowPublicKeyRetrieval=true
+                SPRING_DATASOURCE_URL: jdbc:mysql://mysql_db:3306/ventas_db?useSSL=false&serverTimezone=UTC&createDatabaseIfNotExist=true&allowPublicKeyRetrieval=true
                 SPRING_DATASOURCE_USERNAME: appuser
                 SPRING_DATASOURCE_PASSWORD: apppass123
                 SPRING_JPA_HIBERNATE_DDL_AUTO: update
@@ -168,8 +165,7 @@ jobs:
                 - backend_net
 
           volumes:
-            mysql_despacho_data:
-            mysql_ventas_data:
+            mysql_data:
 
           networks:
             backend_net:
@@ -199,8 +195,30 @@ jobs:
           fi
 
           sudo docker compose version
+
+          echo "Limpiando contenedores antiguos si existen..."
+          sudo docker rm -f mysql_despacho mysql_ventas mysql_db backend_despacho backend_ventas || true
+
           sudo docker compose pull
-          sudo docker compose up -d --remove-orphans
-          sudo docker logs mysql_despacho || true
+
+          sudo docker compose up -d --remove-orphans || {
+            echo "Error al levantar docker compose"
+            sudo docker compose ps || true
+            sudo docker logs mysql_db --tail=150 || true
+            sudo docker logs backend_despacho --tail=100 || true
+            sudo docker logs backend_ventas --tail=100 || true
+            exit 1
+          }
+
+          echo "Estado final de contenedores:"
           sudo docker compose ps
+
+          echo "Logs MySQL:"
+          sudo docker logs mysql_db --tail=80 || true
+
+          echo "Logs Backend Despacho:"
+          sudo docker logs backend_despacho --tail=80 || true
+
+          echo "Logs Backend Ventas:"
+          sudo docker logs backend_ventas --tail=80 || true
           EOF
