@@ -177,6 +177,27 @@ jobs:
 
           echo "${{ secrets.DOCKERHUB_TOKEN }}" | sudo docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
 
+          if ! sudo docker compose version >/dev/null 2>&1; then
+            echo "Docker Compose plugin no encontrado. Instalando Docker Compose..."
+
+            sudo mkdir -p /usr/local/lib/docker/cli-plugins
+
+            ARCH=$(uname -m)
+
+            if [ "$ARCH" = "x86_64" ]; then
+              COMPOSE_ARCH="x86_64"
+            elif [ "$ARCH" = "aarch64" ]; then
+              COMPOSE_ARCH="aarch64"
+            else
+              echo "Arquitectura no soportada: $ARCH"
+              exit 1
+            fi
+
+            sudo curl -SL "https://github.com/docker/compose/releases/download/v2.29.7/docker-compose-linux-${COMPOSE_ARCH}" -o /usr/local/lib/docker/cli-plugins/docker-compose
+            sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+          fi
+
+          sudo docker compose version
           sudo docker compose pull
           sudo docker compose up -d --remove-orphans
           sudo docker compose ps
