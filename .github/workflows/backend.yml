@@ -104,10 +104,11 @@ jobs:
               networks:
                 - backend_net
               healthcheck:
-                test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-prootpass123"]
+                test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -prootpass123 || exit 1"]
                 interval: 10s
                 timeout: 5s
                 retries: 10
+                start_period: 90s
 
             backend_despacho:
               image: dvillanueva1993/backend-despacho:latest
@@ -200,5 +201,6 @@ jobs:
           sudo docker compose version
           sudo docker compose pull
           sudo docker compose up -d --remove-orphans
+          sudo docker logs mysql_despacho || true
           sudo docker compose ps
           EOF
