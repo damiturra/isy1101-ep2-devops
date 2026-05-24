@@ -1,0 +1,46 @@
+services:
+  db:
+    image: mysql:8.0
+    container_name: mysql_despacho
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: despacho_db
+      MYSQL_USER: appuser
+      MYSQL_PASSWORD: apppass123
+      MYSQL_ROOT_PASSWORD: rootpass123
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - backend_net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-prootpass123"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: .
+    container_name: backend_despacho
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      SERVER_PORT: 8080
+      DB_ENDPOINT: db
+      DB_PORT: 3306
+      DB_NAME: despacho_db
+      DB_USERNAME: appuser
+      DB_PASSWORD: apppass123
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+    networks:
+      - backend_net
+
+volumes:
+  mysql_data:
+
+networks:
+  backend_net:
+    driver: bridge

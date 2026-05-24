@@ -1,0 +1,12 @@
+services:
+  frontend:
+    build: .
+    image: frontend-despacho:local
+    container_name: frontend_despacho
+    restart: unless-stopped
+    ports:
+      - "80:8080"
+    environment:
+      BACKEND_URL: http://host.docker.internal:8080
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

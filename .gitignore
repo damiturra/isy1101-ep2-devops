@@ -1,0 +1,17 @@
+*.pem
+*.key
+.env
+.env.*
+.DS_Store
+
+node_modules/
+dist/
+build/
+
+target/
+*.jar
+
+.vscode/
+.idea/
+
+docker-data/
