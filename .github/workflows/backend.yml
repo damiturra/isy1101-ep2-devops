@@ -60,6 +60,20 @@ jobs:
           echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/ec2_key.pem
           chmod 600 ~/.ssh/ec2_key.pem
 
+      - name: Preparar Frontend Bastion para recibir llave
+        run: |
+          ssh \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o IdentitiesOnly=yes \
+            -i ~/.ssh/ec2_key.pem \
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_FRONT_HOST }} << 'EOF'
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          chmod u+w ~/.ssh/backend_key.pem 2>/dev/null || true
+          rm -f ~/.ssh/backend_key.pem
+          EOF
+
       - name: Copiar llave al Frontend Bastion
         run: |
           scp \
