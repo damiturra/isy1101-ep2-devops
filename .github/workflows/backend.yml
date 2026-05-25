@@ -54,41 +54,48 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - name: Preparar llave SSH y configuracion de hosts
+      - name: Preparar llave SSH para Frontend Bastion
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/ec2_key.pem
           chmod 600 ~/.ssh/ec2_key.pem
 
-          cat > ~/.ssh/config <<CONFIG
-          Host bastion
-            HostName ${{ secrets.EC2_FRONT_HOST }}
-            User ${{ secrets.EC2_USER }}
-            IdentityFile ~/.ssh/ec2_key.pem
-            StrictHostKeyChecking no
-            UserKnownHostsFile /dev/null
-            LogLevel ERROR
-
-          Host backend-private
-            HostName ${{ secrets.EC2_BACK_PRIVATE_IP }}
-            User ${{ secrets.EC2_USER }}
-            IdentityFile ~/.ssh/ec2_key.pem
-            ProxyJump bastion
-            StrictHostKeyChecking no
-            UserKnownHostsFile /dev/null
-            LogLevel ERROR
-          CONFIG
-
-          chmod 600 ~/.ssh/config
+      - name: Copiar llave al Frontend Bastion
+        run: |
+          scp \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o IdentitiesOnly=yes \
+            -i ~/.ssh/ec2_key.pem \
+            ~/.ssh/ec2_key.pem \
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_FRONT_HOST }}:~/.ssh/backend_key.pem
 
       - name: Deploy en EC2 Backend privada via Frontend Bastion
         run: |
           ssh \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o IdentitiesOnly=yes \
             -o BatchMode=yes \
-            -o ConnectTimeout=20 \
+            -o ConnectTimeout=30 \
             -o ServerAliveInterval=30 \
             -o ServerAliveCountMax=3 \
-            backend-private << 'EOF'
+            -i ~/.ssh/ec2_key.pem \
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_FRONT_HOST }} << 'FRONTEND'
+          set -e
+
+          chmod 400 ~/.ssh/backend_key.pem
+
+          ssh \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o IdentitiesOnly=yes \
+            -o BatchMode=yes \
+            -o ConnectTimeout=30 \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=3 \
+            -i ~/.ssh/backend_key.pem \
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_BACK_PRIVATE_IP }} << 'BACKEND'
           set -e
 
           mkdir -p ~/devops-backend
@@ -199,14 +206,40 @@ jobs:
           echo "Limpiando contenedores antiguos si existen..."
           sudo docker rm -f mysql_despacho mysql_ventas mysql_db backend_despacho backend_ventas || true
 
+          echo "Descargando imagenes..."
           sudo docker compose pull
 
-          sudo docker compose up -d --remove-orphans || {
-            echo "Error al levantar docker compose"
+          echo "Levantando MySQL..."
+          sudo docker compose up -d mysql_db
+
+          echo "Esperando MySQL..."
+          for i in {1..30}; do
+            if sudo docker exec mysql_db mysqladmin ping -h 127.0.0.1 -uroot -prootpass123 --silent; then
+              echo "MySQL esta listo"
+              break
+            fi
+
+            echo "MySQL aun no esta listo. Intento $i/30"
+            sleep 5
+          done
+
+          echo "Asegurando bases de datos y usuario..."
+          sudo docker exec mysql_db mysql -uroot -prootpass123 -e "
+          CREATE DATABASE IF NOT EXISTS despacho_db;
+          CREATE DATABASE IF NOT EXISTS ventas_db;
+          CREATE USER IF NOT EXISTS 'appuser'@'%' IDENTIFIED BY 'apppass123';
+          GRANT ALL PRIVILEGES ON despacho_db.* TO 'appuser'@'%';
+          GRANT ALL PRIVILEGES ON ventas_db.* TO 'appuser'@'%';
+          FLUSH PRIVILEGES;
+          "
+
+          echo "Levantando backends..."
+          sudo docker compose up -d --remove-orphans backend_despacho backend_ventas || {
+            echo "Error al levantar backends"
             sudo docker compose ps || true
             sudo docker logs mysql_db --tail=150 || true
-            sudo docker logs backend_despacho --tail=100 || true
-            sudo docker logs backend_ventas --tail=100 || true
+            sudo docker logs backend_despacho --tail=120 || true
+            sudo docker logs backend_ventas --tail=120 || true
             exit 1
           }
 
@@ -217,8 +250,12 @@ jobs:
           sudo docker logs mysql_db --tail=80 || true
 
           echo "Logs Backend Despacho:"
-          sudo docker logs backend_despacho --tail=80 || true
+          sudo docker logs backend_despacho --tail=100 || true
 
           echo "Logs Backend Ventas:"
-          sudo docker logs backend_ventas --tail=80 || true
-          EOF
+          sudo docker logs backend_ventas --tail=100 || true
+
+          echo "Deploy backend finalizado correctamente"
+          BACKEND
+
+          FRONTEND
